@@ -8,12 +8,14 @@ import pandas
 import operator
 import hashlib
 import argparse
+import re
+import sys
 from collections import OrderedDict, Counter
 from sklearn.cluster import AgglomerativeClustering
 from itertools import count
 
 # Full path to binary directory
-BIN_DIR = './bins'
+BIN_DIR = './test_bins'
 
 class Instruction:
     def __init__(self, base_addr, instruction):
@@ -411,9 +413,9 @@ class EcuFile:
         """
         Gets the address of code start
         """
-        inst = str(r2.cmd('/c CMP al #0xf0'), 'ISO-8859-1')
+        inst = str(r2.cmd("/c CMP al #0xf0"))
         if inst is "":
-            inst = str(r2.cmd('/c CMP ax #0xf0f0'), 'ISO-8859-1')
+            inst = str(r2.cmd('/c CMP ax #0xf0f0'))
 
         self.rom_start = int(inst.split()[0], 16)
 
@@ -423,7 +425,7 @@ class EcuFile:
         :param r2: radare2 instance
         """
         r2.cmd('s 0xfffe')
-        location = str(r2.cmd('px0'), 'ISO-8859-1')[:4]
+        location = str(r2.cmd('px0'))[:4]
 
         self.rvector_location = location[2:4] + location[:2]
 
@@ -437,7 +439,7 @@ class EcuFile:
 
         # Get 1000 instructions due to radare2 stopping too early with analysis
         # Fix was to use command 'afu' to resize function after finding main loop
-        instructions = load_json(str(r2.cmd('pdj 1000'), 'ISO-8859-1'))
+        instructions = load_json(str(r2.cmd('pdj 1000')))
         calls = []
         stores = 0
         watch = False
@@ -470,7 +472,7 @@ class EcuFile:
         Grab reset vector blocks
         :param r2: radare2 instance
         """
-        self.rvector_cfg = Cfg(load_json((str(r2.cmd("agj"), 'ISO-8859-1'))))
+        self.rvector_cfg = Cfg(load_json((str(r2.cmd("agj")))))
         hashes = []
 
         for offset, pair in self.rvector_cfg.blocks.items():
@@ -490,7 +492,7 @@ class EcuFile:
 
         r2.cmd("s 0x{}".format(self.healthcheck))
         r2.cmd("aa")
-        self.healthcheck_cfg = Cfg(load_json(str(r2.cmd("agj"), 'ISO-8859-1')))
+        self.healthcheck_cfg = Cfg(load_json(str(r2.cmd("agj"))))
 
         instructions = []
         for offset, pair in self.healthcheck_cfg.blocks.items():
@@ -511,9 +513,9 @@ class EcuFile:
             for function in functions:
                 r2.cmd("s {}".format(function))
                 r2.cmd("aa; sf.")
-                corrected_addr = str(r2.cmd("s"), 'ISO-8859-1').strip()
+                corrected_addr = str(r2.cmd("s")).strip()
 
-                self.sensors[sensor].append(Function(corrected_addr, Cfg(load_json(str(r2.cmd("agj"), 'ISO-8859-1')))))
+                self.sensors[sensor].append(Function(corrected_addr, Cfg(load_json(str(r2.cmd("agj"))))))
 
 
 class Cluster:
@@ -550,8 +552,8 @@ class Cluster:
                     # Set default chosen function
                     r2.cmd("s {}".format(sensor_fcn.base_addr))
                     r2.cmd('aa')
-                    chosen_fcn = Function(str(r2.cmd("s"), 'ISO-8859-1').strip(), Cfg(load_json(
-                        str(r2.cmd("agj"), 'ISO-8859-1')
+                    chosen_fcn = Function(str(r2.cmd("s")).strip(), Cfg(load_json(
+                        str(r2.cmd("agj"))
                     )))
 
                     highest_jaccard = jaccard_index(control_hashes, chosen_fcn.cfg.get_opcode_hashes(chosen_fcn.cfg.first))
@@ -855,8 +857,8 @@ def analyze_functions(bins):
 
                 r2.cmd("s {}".format(function))
                 r2.cmd('aa; sf.')
-                corrected_addr = str(r2.cmd("s"), 'ISO-8859-1')
-                fcn = Function(corrected_addr, Cfg(load_json(str(r2.cmd("agj"), 'ISO-8859-1'))))
+                corrected_addr = str(r2.cmd("s"))
+                fcn = Function(corrected_addr, Cfg(load_json(str(r2.cmd("agj")))))
 
                 hashes = hashes[1:-1].split(',')
                 hashes = [x.replace('\'', '') for x in hashes]
@@ -881,6 +883,118 @@ def write_clusters(clusters):
         json.dump(results, outfile, indent=4)
         print("Write results to cluster_matches.json")
 
+def write_functions(binary, sensors):
+    """
+    Outputs a Json file containing information about the functions in the binary
+    to be used for viewing the functions graphically
+    param binary: the binary to be analyzed
+    param sensors: a dict of the binary's sensor addresses and meanings
+    """
+    json_output = {}
+    visited = []
+
+    r2 = setup_r2("{}/{}".format(BIN_DIR, binary.filename))
+    r2.cmd("s 0x{}".format(binary.rvector_location))
+    r2.cmd("aa")
+    func_addr = str(r2.cmd("s")).strip()
+
+    func_json = load_json(str(r2.cmd("agj")))
+
+    json_output[func_addr] = {}
+    json_output[func_addr]['function'] = func_json
+
+    instr_count = 0
+    JSR_count = 0
+    sensor_accesses = []
+    
+    for block in func_json[0]['blocks']:
+        for instr in block['ops']:        
+            instr_count += 1
+            try:
+                operands = instr['opcode'].split()
+                if (operands[0] == 'JSR'):
+                    JSR_count += 1
+                    print(operands[1])
+
+            except:
+                print("It made it to the exception handling")
+                continue
+                
+        #TODO: record sensor accesses
+            for name, sensor in sensors.items():
+                pattern = "\$?{}".format(sensor)
+                if re.search(pattern, instr['disasm']):
+                    #print("{}: {}".format(name, sensor))
+                    sensor_tuple = name, sensor
+                    sensor_accesses.append(sensor_tuple)
+    
+    json_output[func_addr]['accesses'] = sensor_accesses
+    json_output[func_addr]['instruction_count'] = instr_count
+    json_output[func_addr]['JSR_count'] = JSR_count
+
+    for call in binary.rvector_jmps:
+        #print(call)
+        visited.append(call)
+        recursive_seek_functions(r2, sensors, call, json_output, visited)
+
+    r2.quit()
+
+    outfile_name = binary.name + ".json"
+    with open(outfile_name, "w") as outfile:
+        json.dump(json_output, outfile, indent=4)
+
+def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
+    r2.cmd("s {}".format(func_addr))
+    r2.cmd("aa")
+
+    func_json = load_json(str(r2.cmd("agj")))
+
+    json_output[func_addr] = {}
+    json_output[func_addr]['function'] = func_json
+
+    instr_count = 0
+    JSR_count = 0
+    sensor_accesses = []
+    to_visit = []
+    
+    for block in func_json[0]['blocks']:
+        for instr in block['ops']:        
+            instr_count += 1
+            try:
+                operands = instr['opcode'].split()
+                if (operands[0] == 'JSR'):
+                    print("{} is a JSR address".format(operands[1]))
+ 
+                    # Error checking: making sure the JSR addresses make sense
+                    JSR_pattern = "0x[0-9a-fA-F]{4}"
+                    if (re.search(JSR_pattern, operands[1]) and (int(operands[1], 16) >= int("0x8000", 16)) and (int(operands[1], 16) < int("0xffd0", 16))):
+                        JSR_count += 1
+                        print("{} passed the dubious regex".format(operands[1]))
+                        if (operands[1] not in visited):
+                            to_visit.append(operands[1])
+                    else:
+                        continue
+            except:
+                continue
+                
+        #TODO: record sensor accesses
+            for name, sensor in sensors.items():
+                pattern = "\$?{}".format(sensor)
+                if re.search(pattern, instr['disasm']):
+                    #print("{}: {}".format(name, sensor))
+                    sensor_tuple = name, sensor
+                    sensor_accesses.append(sensor_tuple)
+    
+    json_output[func_addr]['accesses'] = sensor_accesses
+    json_output[func_addr]['instruction_count'] = instr_count
+    json_output[func_addr]['JSR_count'] = JSR_count
+
+    for call in to_visit:
+        #print(call)
+        visited.append(call)
+        recursive_seek_functions(r2, sensors, call, json_output, visited)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Cluster M7700 binaries & find sensor addresses')
     parser.add_argument('-s', action='store_true', help='simplify sensor findings output')
@@ -897,13 +1011,24 @@ if __name__ == '__main__':
 
     bins = analyze_bins()
 
-    print('Building clusters using \'{}\' features'.format(method))
-    clusters = build_clusters(bins, method)
-    set_cluster_controls(clusters)
-    analyze_functions(bins)
+    #print('Building clusters using \'{}\' features'.format(method))
+    #clusters = build_clusters(bins, method)
+    #set_cluster_controls(clusters)
+    #analyze_functions(bins)
 
-    for cluster in clusters:
-        cluster.match_functions(bins)
-        cluster.match_sensors(args.s)
+    #for cluster in clusters:
+    #    cluster.match_functions(bins)
+    #    cluster.match_sensors(args.s)
 
-    write_clusters(clusters)
+    #write_clusters(clusters)
+
+    # dummy code starts here:
+    sensors = {}
+    with open("controls.json") as file:
+        controls_js = json.load(file)
+        sensors = controls_js["722527-1993-USDM-SVX-EG33.bin"]["sensors"]
+    print(sensors)
+    
+    for filename, binary in bins.items():
+        print("Scanning functions of {}".format(binary.name))
+        write_functions(binary, sensors)
