@@ -949,6 +949,9 @@ def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
 
     func_json = load_json(str(r2.cmd("agj")))
 
+    if (len(func_json) == 0):
+        return
+
     json_output[func_addr] = {}
     json_output[func_addr]['function'] = func_json
 
