@@ -883,24 +883,30 @@ def write_clusters(clusters):
         json.dump(results, outfile, indent=4)
         print("Write results to cluster_matches.json")
 
-def write_functions(binary, sensors):
+def analyze_functions(binary, sensors):
     """
     Outputs a Json file containing information about the functions in the binary
     to be used for viewing the functions graphically
     param binary: the binary to be analyzed
-    param sensors: a dict of the binary's sensor addresses and meanings
+    param sensors: a dict of the binary's sensors and their addresses
     """
     json_output = {}
     visited = []
 
+    # Get the address of the binary's reset vector
     r2 = setup_r2("{}/{}".format(BIN_DIR, binary.filename))
     r2.cmd("s 0x{}".format(binary.rvector_location))
     r2.cmd("aa")
     func_addr = str(r2.cmd("s")).strip()
 
+    # Store the Json of the reset vector to the output
     func_json = load_json(str(r2.cmd("agj")))
 
     json_output[func_addr] = {}
+    
+    # The base_addr entry is redundant, but it makes parsing the Json
+    # file easier in the function viewer
+    json_output[func_addr]['base_addr'] = func_addr
     json_output[func_addr]['function'] = func_json
 
     instr_count = 0
@@ -908,20 +914,27 @@ def write_functions(binary, sensors):
     sensor_accesses = []
     
     for block in func_json[0]['blocks']:
+
+        # Count instructions in the reset vector
         for instr in block['ops']:        
             instr_count += 1
             try:
                 operands = instr['opcode'].split()
+
+                # Count JSR calls in the reset vector
                 if (operands[0] == 'JSR'):
                     JSR_count += 1
-                    print(operands[1])
 
             except:
                 print("It made it to the exception handling")
                 continue
                 
-        #TODO: record sensor accesses
+            # Record sensor accesses in the reset vector
             for name, sensor in sensors.items():
+
+                # This regex makes sure reading/writing constants (preceded by a # in the 
+                # disassembly) that happen to match a sensor address aren't counted as sensor
+                # accesses
                 pattern = "\$?{}".format(sensor)
                 if re.search(pattern, instr['disasm']):
                     #print("{}: {}".format(name, sensor))
@@ -932,18 +945,35 @@ def write_functions(binary, sensors):
     json_output[func_addr]['instruction_count'] = instr_count
     json_output[func_addr]['JSR_count'] = JSR_count
 
+    # Recursively check all the calls in the main loop
+    children = []
     for call in binary.rvector_jmps:
-        #print(call)
+        print("{} is a call from the main loop".format(call))
         visited.append(call)
+
+        # Record function calls made in the main loop, omitting duplicates
+        if (call not in children):
+            children.append(call)
         recursive_seek_functions(r2, sensors, call, json_output, visited)
+
+    json_output[func_addr]['children'] = children
 
     r2.quit()
 
-    outfile_name = binary.name + ".json"
-    with open(outfile_name, "w") as outfile:
-        json.dump(json_output, outfile, indent=4)
+    # Dump the Json for the binary to a file
+    write_function(binary.name, json_output)
 
 def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
+    """
+    Recursively analyzes a function and all the functions called by it, storing the information in a
+    Json data structure submitted as a parameter.
+    param r2: the radare2 session in use
+    param sensors: a dict of the binary's sensors and their addresses
+    param func_addr: the address of the function to be analyzed
+    param json_output: the Json structure to write the function information to
+    param visited: a list of functions that have already been analyzed
+    """
+    # Get the Json for the function
     r2.cmd("s {}".format(func_addr))
     r2.cmd("aa")
 
@@ -953,26 +983,42 @@ def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
         return
 
     json_output[func_addr] = {}
+
+    # The base_addr entry is redundant, but it makes parsing the Json
+    # file easier in the function viewer
+    json_output[func_addr]['base_addr'] = func_addr
     json_output[func_addr]['function'] = func_json
 
     instr_count = 0
     JSR_count = 0
     sensor_accesses = []
     to_visit = []
+    children = []
     
     for block in func_json[0]['blocks']:
-        for instr in block['ops']:        
+        for instr in block['ops']:
+
+            # Count the number of instructions in the function        
             instr_count += 1
             try:
                 operands = instr['opcode'].split()
+
+                # Count the number of JSR calls
                 if (operands[0] == 'JSR'):
                     print("{} is a JSR address".format(operands[1]))
  
-                    # Error checking: making sure the JSR addresses make sense
+                    # Error checking: make sure the JSR addresses make sense
                     JSR_pattern = "0x[0-9a-fA-F]{4}"
                     if (re.search(JSR_pattern, operands[1]) and (int(operands[1], 16) >= int("0x8000", 16)) and (int(operands[1], 16) < int("0xffd0", 16))):
                         JSR_count += 1
-                        print("{} passed the dubious regex".format(operands[1]))
+
+                        # Record the function calls this function makes, omitting duplicates
+                        if (operands[1] not in children):
+                            children.append(operands[1])
+
+                        print("{} is a valid JSR address".format(operands[1]))
+
+                        # Record any function calls that have not been analyzed already
                         if (operands[1] not in visited):
                             to_visit.append(operands[1])
                     else:
@@ -980,8 +1026,11 @@ def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
             except:
                 continue
                 
-        #TODO: record sensor accesses
+            # Record sensor accesses
             for name, sensor in sensors.items():
+
+                # The regex makes sure only sensor accesses are counted, instead of constants that happen
+                # to have the same value as a sensor address
                 pattern = "\$?{}".format(sensor)
                 if re.search(pattern, instr['disasm']):
                     #print("{}: {}".format(name, sensor))
@@ -991,12 +1040,38 @@ def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
     json_output[func_addr]['accesses'] = sensor_accesses
     json_output[func_addr]['instruction_count'] = instr_count
     json_output[func_addr]['JSR_count'] = JSR_count
+    json_output[func_addr]['children'] = children
 
+    # Analyze the functions called by this function that have not been previously analyzed
     for call in to_visit:
         #print(call)
         visited.append(call)
         recursive_seek_functions(r2, sensors, call, json_output, visited)
 
+def write_function(bin_name, json_output):
+    """
+    Writes the results of analyzing the binary's functions to a .json file stored in the bin_functions
+    directory.
+    param bin_name: the name of the analyzed binary
+    param json_output: the results of the analysis
+    """
+    # Creates the bin_functions directory if it does not already exist
+    if (not os.path.exists("./bin_functions")):
+        os.mkdir("./bin_functions")
+
+    # Dumps the Json data structure to a file named after the binary's name
+    outfile_name = "./bin_functions/" + bin_name + ".json"
+    with open(outfile_name, "w") as outfile:
+        json.dump(json_output, outfile, indent=4)
+
+def write_binaries(bins):
+    """
+    Writes the names of the analyzed binaries to index.txt file to be read by the function viewer application.
+    param bins: a collection of bins (TODO: Change this to a collection of clusters when re-introducing the clustering functionality)
+    """
+    with open("./bin_functions/index.txt", "w") as outfile:
+        for filename, binary in bins.items():
+            outfile.write(binary.name + "\n")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Cluster M7700 binaries & find sensor addresses')
@@ -1034,4 +1109,5 @@ if __name__ == '__main__':
     
     for filename, binary in bins.items():
         print("Scanning functions of {}".format(binary.name))
-        write_functions(binary, sensors)
+        analyze_functions(binary, sensors)
+    write_binaries(bins)
