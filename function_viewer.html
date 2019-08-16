@@ -10,56 +10,9 @@
             function processFiles() {
                 var jsonName1 = "./bin_functions/" + document.forms["fileselect"]["file1"].value
                 d3.json(jsonName1, function(error, json) {
-                    var height = 5000
-                    var width = 5000
-
-                    var chart = d3.select("#binary1")
-                        .attr("height", height)
-                        .attr("width", width)
-                        
-                    var subroutine = chart.selectAll("g")
-                                          .data(d3.values(json))
-                                          .enter().append("g")
-                                          .attr("transform", function(d, i) { return "translate(0," + i * 100 + ")"})
-
-                    subroutine.append("rect")
-                              .attr("width", 100)
-                              .attr("height", 100)
-                              .style("fill", "blue")
-
-                    subroutine.append("text")
-                              .attr("x", 0)
-                              .attr("y", 0)
-                              .append("tspan")
-                              .attr("x", 0)
-                              .attr("dy", "1.2em")
-                              .text(function(d,i) { return d.base_addr })
-                              .append("tspan")
-                              .attr("x", 0)
-                              .attr("dy", "1.2em")
-                              .text(function(d,i) { return d.instruction_count + " instructions" })
-                              .append("tspan")
-                              .attr("x", 0)
-                              .attr("dy", "1.2em")
-                              .text(function(d,i) { return d.JSR_count + " JSR calls" })
-                              .append("tspan")
-                              .attr("x", 0)
-                              .attr("dy", "1.2em")
-                              .text(function(d,i) { return (+d.JSR_count / +d.instruction_count).toFixed(2) + " JSR calls per instruction" })
-                              // Figure out a decent way to dislay sensors & sensor addresses. 
-/*
-                    var subroutine = chart.selectAll("rect")
-                         .data(json)
-                       .enter().append("rect")  
-                         .attr("x", 10)
-                         .attr("y", 10)
-                         .attr("width", 50)
-                         .attr("height", 50)
-                         .style("fill", "blue")
-                    
-                    subroutine.append("text")
-                        .text(function(d) { return d.instruction_count + " instructions\n" + d.JSR_count + " JSR calls\n" + (+d.JSR_count / +d.instruction_count) + " JSR calls per instruction\nSensors accessed: " + d.accesses } )
-*/
+                    console.log(json)
+                    update(d3.values(json), "#binary1")
+                              
                 })
                 
                 var jsonName2 = "./bin_functions/" + document.forms["fileselect"]["file2"].value
@@ -68,6 +21,128 @@
                 })
                 
             }
+
+
+            function update(source, svg_name) {
+
+                d3.select(svg_name).selectAll('*').remove()
+                
+                var height = 5000
+                var width = 5000
+
+                var chart = d3.select(svg_name)
+                              .attr("height", height)
+                              .attr("width", width)
+
+                var simulation = d3.forceSimulation()
+                                   .force("center_force", d3.forceCenter(width / 2, height / 2))
+                                   .force("repel_force", d3.forceManyBody().strength(-100))
+                 
+      
+                var subroutine = chart.selectAll("g")
+                                      .data(source)
+                                      .enter().append("g")
+
+                
+                subroutine.append("rect")
+                          .attr("width", 250)
+                          .attr("height", 150)
+                          .style("fill", "blue")
+/*
+                var subroutine = chart.append("g")
+                                      .selectAll("rect")
+                                      .data(source)
+                                      .enter().append("rect")
+                                      .attr("width", 250)
+                                      .attr("height", 150)
+                                      .style("fill", "blue")
+*/
+                var subroutine_text = subroutine.append("text")
+                              .attr("x", 0)
+                              .attr("y", 0)
+                            .append("tspan")
+                              .attr("x", 0)
+                              .attr("dy", "1.2em")
+                              .text(function(d,i) { return d.base_addr })
+
+                subroutine.each(function(d,i) {
+                    for (let access in d.accesses) {
+                        d3.select(this).select("tspan").append("tspan")
+                                      .attr("x", 0)
+                                      .attr("dy", "1.2em")
+                                      .text(function() { 
+                                          return d.accesses[access][1] + " (" + d.accesses[access][0] + ")"
+                                      })
+                   }
+               })
+
+                       
+               subroutine_text.append("tspan")
+                              .attr("x", 0)
+                              .attr("dy", "1.2em")
+                              .text(function(d,i) { return d.instruction_count + " instructions" })
+
+               subroutine_text.append("tspan")
+                              .attr("x", 0)
+                              .attr("dy", "1.2em")
+                              .text(function(d,i) { return d.JSR_count + " JSR calls" })
+
+               subroutine_text.append("tspan")
+                              .attr("x", 0)
+                              .attr("dy", "1.2em")
+                              .text(function(d,i) { return (+d.JSR_count / +d.instruction_count).toFixed(2) + " JSR calls per instruction" })
+
+               var link_data = findLinks(source)
+               var link_force = d3.forceLink()
+                                  .id(function(d) { return d.base_addr })
+                                  .distance(2000)
+                                  .strength(1)
+
+               simulation.force("link", link_force)
+
+               var link = chart.append("g")
+                               .selectAll("line")
+                               .data(link_data)
+                               .enter().append("line")
+                                 .attr("stroke-width", 2)
+                                 .attr("stroke", "black")
+
+               simulation.nodes(source)
+               simulation.force("link")
+                         .links(link_data)
+
+               simulation.on("tick", function() {
+                   subroutine
+                      .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")" })
+
+                   link
+                      .attr("x1", function(d) { return d.source.x })
+                      .attr("y1", function(d) { return d.source.y })
+                      .attr("x2", function(d) { return d.target.x })
+                      .attr("y2", function(d) { return d.target.y })
+               })
+
+
+            }
+
+
+            function findLinks(source) {
+
+                var linkArray = []
+                for (let subroutine in source) {
+                    for (let child in source[subroutine].children) {
+                        var link = {
+                            'source': source[subroutine].base_addr,
+                            'target': source[subroutine].children[child]
+                        }
+                        //console.log(link)
+                        linkArray.push(link)
+                    }
+                }
+                return linkArray
+
+            }
+
         </script>
     </head>
 

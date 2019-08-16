@@ -979,9 +979,6 @@ def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
 
     func_json = load_json(str(r2.cmd("agj")))
 
-    if (len(func_json) == 0):
-        return
-
     json_output[func_addr] = {}
 
     # The base_addr entry is redundant, but it makes parsing the Json
@@ -995,6 +992,13 @@ def recursive_seek_functions(r2, sensors, func_addr, json_output, visited):
     to_visit = []
     children = []
     
+    if (len(func_json) == 0):
+        json_output[func_addr]['accesses'] = sensor_accesses
+        json_output[func_addr]['instruction_count'] = instr_count
+        json_output[func_addr]['JSR_count'] = JSR_count
+        json_output[func_addr]['children'] = children
+        return
+
     for block in func_json[0]['blocks']:
         for instr in block['ops']:
 
