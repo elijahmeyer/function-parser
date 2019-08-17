@@ -90,7 +90,12 @@
                subroutine_text.append("tspan")
                               .attr("x", 0)
                               .attr("dy", "1.2em")
-                              .text(function(d,i) { return (+d.JSR_count / +d.instruction_count).toFixed(2) + " JSR calls per instruction" })
+                              .text(function(d,i) {
+                                  if (+d.JSR_count == 0) {
+                                      return "0 JSR calls per instruction"
+                                  } 
+                                  return (+d.JSR_count / +d.instruction_count).toFixed(2) + " JSR calls per instruction" 
+                              })
 
                var link_data = findLinks(source)
                var link_force = d3.forceLink()
