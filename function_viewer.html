@@ -4,18 +4,29 @@
     <head>
         <meta charset="utf-8">
         <title>M7700 Function Viewer</title>
+        <style>
+            .link {
+                stroke: black;
+                stroke-width: 2px;
+            }
+            .scrollbar {
+                overflow: scroll;
+                width: 5000px;
+                height: 5000px;
+            }
+        </style>
+
         <script src="https://d3js.org/d3.v4.min.js"></script>
         
         <script language="javascript" type="text/javascript">
             function processFiles() {
-                var jsonName1 = "./bin_functions/" + document.forms["fileselect"]["file1"].value
+                var jsonName1 = "./bin_functions/" + document.forms["fileselect"]["file1"].value + ".json"
                 d3.json(jsonName1, function(error, json) {
-                    console.log(json)
-                    update(d3.values(json), "#binary1")
+                    update(json, "#binary1", document.forms["fileselect"]["file1"].value)
                               
                 })
                 
-                var jsonName2 = "./bin_functions/" + document.forms["fileselect"]["file2"].value
+                var jsonName2 = "./bin_functions/" + document.forms["fileselect"]["file2"].value + ".json"
                 d3.json(jsonName2, function(error, json) {
                     console.log(json)
                 })
@@ -23,31 +34,51 @@
             }
 
 
-            function update(source, svg_name) {
+            function update(source, svg_name, file_name) {
 
                 d3.select(svg_name).selectAll('*').remove()
                 
-                var height = 5000
-                var width = 5000
+                var height = 15000
+                var width = 15000
 
                 var chart = d3.select(svg_name)
                               .attr("height", height)
                               .attr("width", width)
 
                 var tree_map = d3.tree().size([height, width])
-                var root = d3.hierarchy(source)
+/*
+                var tree_map = d3.tree()
+                                 .nodeSize([150, 250])
+                                 .separation(function(a, b) {
+                                     return a.parent == b.parent ? 1 : 1.25
+                                 })
+*/
+                var root = d3.hierarchy(source, function(d) { return d.children })
 
                 var tree_data = tree_map(root)
                 var nodes = tree_data.descendants(),
                     links = tree_data.descendants().slice(1);
-
-                nodes.forEach(function(d) { d.y = d.depth * 180 })
-                 
+                
+                nodes.forEach(function(d) { d.y = d.depth * 300 })
+                
+               var link_enter = chart.selectAll(".link")
+                                     .data(links)
+                                     .enter().append("line")
+                                     .attr("class", "link")
+                                     .attr('x1', function(d) { return d.y })
+                                     .attr('y1', function(d) { return d.x })
+                                     .attr('x2', function(d) { return d.parent.y })
+                                     .attr('y2', function(d) { return d.parent.x }) 
       
                 var subroutine = chart.selectAll("g")
-                                      .data(nodes)
+                                      .data(nodes, function(d, i) { return d.id || (d.id = ++i); })
                                       .enter().append("g")
                                       .attr("transform", function(d) { return "translate(" + d.y + "," + d.x + ")" })
+                                      .on("click", function() {
+                                          var image_dir = "./bin_functions/" + file_name + "_images"
+                                          
+                                          console.log(d3.select(this).data)
+                                      })
 
                 
                 subroutine.append("rect")
@@ -61,15 +92,15 @@
                             .append("tspan")
                               .attr("x", 0)
                               .attr("dy", "1.2em")
-                              .text(function(d,i) { return d.base_addr })
+                              .text(function(d,i) { return d.data.base_addr })
 
                 subroutine.each(function(d,i) {
-                    for (let access in d.accesses) {
+                    for (let access in d.data.accesses) {
                         d3.select(this).select("tspan").append("tspan")
                                       .attr("x", 0)
                                       .attr("dy", "1.2em")
                                       .text(function() { 
-                                          return d.accesses[access][1] + " (" + d.accesses[access][0] + ")"
+                                          return d.data.accesses[access][1] + " (" + d.data.accesses[access][0] + ")"
                                       })
                    }
                })
@@ -78,38 +109,32 @@
                subroutine_text.append("tspan")
                               .attr("x", 0)
                               .attr("dy", "1.2em")
-                              .text(function(d,i) { return d.instruction_count + " instructions" })
+                              .text(function(d,i) { return d.data.instruction_count + " instructions" })
 
                subroutine_text.append("tspan")
                               .attr("x", 0)
                               .attr("dy", "1.2em")
-                              .text(function(d,i) { return d.JSR_count + " JSR calls" })
+                              .text(function(d,i) { return d.data.JSR_count + " JSR calls" })
 
                subroutine_text.append("tspan")
                               .attr("x", 0)
                               .attr("dy", "1.2em")
-                              .text(function(d,i) { return (+d.JSR_count / +d.instruction_count).toFixed(2) + " JSR calls per instruction" })
-
-               
-            }
-
-
-            function findLinks(source) {
-
-                var linkArray = []
-                for (let subroutine in source) {
-                    for (let child in source[subroutine].children) {
-                        var link = {
-                            'source': source[subroutine].base_addr,
-                            'target': source[subroutine].children[child]
-                        }
-                        //console.log(link)
-                        linkArray.push(link)
-                    }
-                }
-                return linkArray
-
-            }
+                              .text(function(d,i) { 
+                                  if (+d.data.instruction_count == 0) {
+                                      return "0 JSR calls per instruction";
+                                  }
+                                  return (+d.data.JSR_count / +d.data.instruction_count).toFixed(2) + " JSR calls per instruction" 
+                              })
+/*
+               var link_enter = chart.selectAll(".link")
+                                     .data(links)
+                                     .enter().append("line")
+                                     .attr("class", "link")
+                                     .attr('x1', function(d) { return d.y })
+                                     .attr('y1', function(d) { return d.x })
+                                     .attr('x2', function(d) { return d.parent.y })
+                                     .attr('y2', function(d) { return d.parent.x })
+*/            }
 
         </script>
     </head>
@@ -126,9 +151,16 @@
             <input type="button" value="View Functions" onclick=processFiles()>
         </form>
         <br><br>
-        <svg id="binary1"></svg>
+        <div class="scrollbar">
+            <svg id="binary1"></svg>
+        </div>
         <br><br>
-        <svg class="chart" ids="binary2"></svg>
+        <div class="scrollbar">
+            <svg id="binary2"></svg>
+        </div>
+        <br><br>
+        <img id="image1">
+        <img id="image2">
         <script language="javascript" type = "text/javascript">
             <!--
                 // index.txt is a file generated by ClusterBins.py that lists all of the files
@@ -146,7 +178,7 @@
                       .selectAll("option")
                         .data(data.slice(0, data.length-1))
                       .enter().append("option")
-                      .attr("value", function(d) { return d + ".json" } )
+                      .attr("value", function(d) { return d } )
                       .text(function(d) { return d } )
                 })
                 

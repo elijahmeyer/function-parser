@@ -10,6 +10,7 @@ import hashlib
 import argparse
 import re
 import sys
+import shutil
 from collections import OrderedDict, Counter
 from sklearn.cluster import AgglomerativeClustering
 from itertools import count
@@ -899,15 +900,14 @@ def analyze_functions(binary, sensors):
     r2.cmd("aa")
     func_addr = str(r2.cmd("s")).strip()
 
+    # Save reset vector as an image
+    save_function_image(r2, binary.name, func_addr)
+
     # Store the Json of the reset vector to the output
     func_json = load_json(str(r2.cmd("agj")))
-
-    json_output[func_addr] = {}
     
-    # The base_addr entry is redundant, but it makes parsing the Json
-    # file easier in the function viewer
-    json_output[func_addr]['base_addr'] = func_addr
-    json_output[func_addr]['function'] = func_json
+    json_output['base_addr'] = func_addr
+    json_output['function'] = func_json
 
     instr_count = 0
     JSR_count = 0
@@ -941,13 +941,13 @@ def analyze_functions(binary, sensors):
                     sensor_tuple = name, sensor
                     sensor_accesses.append(sensor_tuple)
     
-    json_output[func_addr]['accesses'] = sensor_accesses
-    json_output[func_addr]['instruction_count'] = instr_count
-    json_output[func_addr]['JSR_count'] = JSR_count
+    json_output['accesses'] = sensor_accesses
+    json_output['instruction_count'] = instr_count
+    json_output['JSR_count'] = JSR_count
 
     # Recursively check all the calls in the main loop
     children = []
-    children_json = {}
+    children_json = []
     for call in binary.rvector_jmps:
         print("{} is a call from the main loop".format(call))
         visited.append(call)
@@ -955,16 +955,16 @@ def analyze_functions(binary, sensors):
         # Record function calls made in the main loop, omitting duplicates
         if (call not in children):
             children.append(call)
-            children_json[call] = recursive_seek_functions(r2, sensors, call, visited)
+            children_json.append(recursive_seek_functions(r2, binary.name, sensors, call, visited))
 
-    json_output[func_addr]['children'] = children_json
+    json_output['children'] = children_json
 
     r2.quit()
 
     # Dump the Json for the binary to a file
     write_function(binary.name, json_output)
 
-def recursive_seek_functions(r2, sensors, func_addr, visited):
+def recursive_seek_functions(r2, bin_name, sensors, func_addr, visited):
     """
     Recursively analyzes a function and all the functions called by it, storing the information in a
     Json data structure submitted as a parameter.
@@ -974,16 +974,17 @@ def recursive_seek_functions(r2, sensors, func_addr, visited):
     param json_output: the Json structure to write the function information to
     param visited: a list of functions that have already been analyzed
     """
-    # Get the Json for the function
     r2.cmd("s {}".format(func_addr))
     r2.cmd("aa")
 
+    # Save function as an image
+    save_function_image(r2, bin_name, func_addr)
+
+    # Get the Json for the function
     func_json = load_json(str(r2.cmd("agj")))
 
     json_output = {}
 
-    # The base_addr entry is redundant, but it makes parsing the Json
-    # file easier in the function viewer
     json_output['base_addr'] = func_addr
     json_output['function'] = func_json
 
@@ -992,7 +993,7 @@ def recursive_seek_functions(r2, sensors, func_addr, visited):
     sensor_accesses = []
     to_visit = []
     children = []
-    children_json = {}
+    children_json = []
     
     if (len(func_json) == 0):
         json_output['accesses'] = sensor_accesses
@@ -1014,6 +1015,8 @@ def recursive_seek_functions(r2, sensors, func_addr, visited):
                     print("{} is a JSR address".format(operands[1]))
  
                     # Error checking: make sure the JSR addresses make sense
+                    # Make sure the addreses are valid hex numbers and that they fall between
+                    # the 'from' and 'to' values from the setup_r2() function.
                     JSR_pattern = "0x[0-9a-fA-F]{4}"
                     if (re.search(JSR_pattern, operands[1]) and (int(operands[1], 16) >= int("0x8000", 16)) and (int(operands[1], 16) < int("0xffd0", 16))):
                         JSR_count += 1
@@ -1051,10 +1054,12 @@ def recursive_seek_functions(r2, sensors, func_addr, visited):
     for call in to_visit:
         #print(call)
         visited.append(call)
-        children_json[call] = recursive_seek_functions(r2, sensors, call, visited)
+        children_json.append(recursive_seek_functions(r2, bin_name, sensors, call, visited))
 
     json_output['children'] = children_json
+
     return json_output
+
 
 def write_function(bin_name, json_output):
     """
@@ -1072,6 +1077,7 @@ def write_function(bin_name, json_output):
     with open(outfile_name, "w") as outfile:
         json.dump(json_output, outfile, indent=4)
 
+
 def write_binaries(bins):
     """
     Writes the names of the analyzed binaries to index.txt file to be read by the function viewer application.
@@ -1080,6 +1086,21 @@ def write_binaries(bins):
     with open("./bin_functions/index.txt", "w") as outfile:
         for filename, binary in bins.items():
             outfile.write(binary.name + "\n")
+
+
+def save_function_image(r2, bin_name, func_addr):
+    image_dir = "./bin_functions/" + bin_name + "_images"
+    if (not os.path.exists(image_dir)):
+        os.mkdir(image_dir)
+
+    image_name = image_dir + "/" + bin_name + "-" + func_addr
+    if (not os.path.exists(image_name)):
+        r2.cmd("agw {}".format(image_name))
+
+def clear_bin_data():
+    if (os.path.exists("./bin_functions")):
+        shutil.rmtree("./bin_functions")
+    os.mkdir("./bin_functions")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Cluster M7700 binaries & find sensor addresses')
@@ -1115,6 +1136,7 @@ if __name__ == '__main__':
         sensors = controls_js["722527-1993-USDM-SVX-EG33.bin"]["sensors"]
     print(sensors)
     
+    clear_bin_data()
     for filename, binary in bins.items():
         print("Scanning functions of {}".format(binary.name))
         analyze_functions(binary, sensors)
