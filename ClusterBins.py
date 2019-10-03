@@ -901,7 +901,7 @@ def analyze_functions(binary, sensors):
     func_addr = str(r2.cmd("s")).strip()
 
     # Save reset vector as an image
-    save_function_image(r2, binary.name, func_addr)
+    #save_function_image(r2, binary.name, func_addr)
 
     # Store the Json of the reset vector to the output
     func_json = load_json(str(r2.cmd("agj")))
@@ -944,6 +944,7 @@ def analyze_functions(binary, sensors):
     json_output['accesses'] = sensor_accesses
     json_output['instruction_count'] = instr_count
     json_output['JSR_count'] = JSR_count
+    json_output['parents'] = []
 
     # Recursively check all the calls in the main loop
     children = []
@@ -958,6 +959,9 @@ def analyze_functions(binary, sensors):
             children_json.append(recursive_seek_functions(r2, binary.name, sensors, call, visited))
 
     json_output['children'] = children_json
+
+    for child in json_output['children']:
+        child['parents'].append(func_addr)
 
     r2.quit()
 
@@ -978,7 +982,7 @@ def recursive_seek_functions(r2, bin_name, sensors, func_addr, visited):
     r2.cmd("aa")
 
     # Save function as an image
-    save_function_image(r2, bin_name, func_addr)
+    #save_function_image(r2, bin_name, func_addr)
 
     # Get the Json for the function
     func_json = load_json(str(r2.cmd("agj")))
@@ -999,6 +1003,7 @@ def recursive_seek_functions(r2, bin_name, sensors, func_addr, visited):
         json_output['accesses'] = sensor_accesses
         json_output['instruction_count'] = instr_count
         json_output['JSR_count'] = JSR_count
+        json_output['parents'] = []
         json_output['children'] = children_json
         return json_output
 
@@ -1049,6 +1054,7 @@ def recursive_seek_functions(r2, bin_name, sensors, func_addr, visited):
     json_output['accesses'] = sensor_accesses
     json_output['instruction_count'] = instr_count
     json_output['JSR_count'] = JSR_count
+    json_output['parents'] = []
 
     # Analyze the functions called by this function that have not been previously analyzed
     for call in to_visit:
@@ -1057,6 +1063,9 @@ def recursive_seek_functions(r2, bin_name, sensors, func_addr, visited):
         children_json.append(recursive_seek_functions(r2, bin_name, sensors, call, visited))
 
     json_output['children'] = children_json
+
+    for child in json_output['children']:
+        child['parents'].append(func_addr)
 
     return json_output
 
